@@ -1,0 +1,229 @@
+package controllers
+
+import (
+	"accounts_backend/database"
+	request "accounts_backend/requests"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/go-playground/validator/v10"
+	"github.com/gorilla/mux"
+	"github.com/xuri/excelize/v2"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+)
+
+func GetEntriesRequestingChange(w http.ResponseWriter, r *http.Request) {
+    // Get the MongoDB collection for entries
+    entriesCollection := database.OpenCollection(database.Client, "entry")
+    usersCollection := database.OpenCollection(database.Client, "users") 
+
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+
+    filter := bson.M{
+        "change_status": bson.M{"$eq": "Requesting"},
+    }
+
+    cur, err := entriesCollection.Find(ctx, filter)
+    if err != nil {
+        http.Error(w, "Failed to fetch records: "+err.Error(), http.StatusInternalServerError)
+        return
+    }
+    defer cur.Close(ctx)
+
+    var entries []bson.M
+    if err = cur.All(ctx, &entries); err != nil {
+        http.Error(w, "Failed to parse records: "+err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    // Enrich entries with user details
+    for _, entry := range entries {
+        if approvedBy, ok := entry["approved_by"].(string); ok && approvedBy != "" {
+            var user bson.M
+            if err := usersCollection.FindOne(ctx, bson.M{"id": approvedBy}).Decode(&user); err == nil {
+				delete(user,"password")
+                entry["approved_by"] = user
+            } else {
+                entry["approved_by"] = "User details not found"
+            }
+        }
+    }
+
+    // Sending back the results as JSON
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(bson.M{"ok": true, "status": "success", "entries": entries})
+}
+func ApproveEntryChange(w http.ResponseWriter, r *http.Request) {
+	var entryReq request.ApproveEntryChangeRequest
+decoder := json.NewDecoder(r.Body)
+if err := decoder.Decode(&entryReq); err != nil {
+	http.Error(w, "Invalid input", http.StatusBadRequest)
+	return
+}
+
+// Initialize the validator and validate the request data
+validate := validator.New()
+err := validate.Struct(entryReq)
+if err != nil {
+	if errs, ok := err.(validator.ValidationErrors); ok {
+		errMessages := request.CustomeErrorMessage(errs)
+		http.Error(w, strings.Join(errMessages, ", "), http.StatusBadRequest)
+		return
+	}
+	http.Error(w, "Validation failed", http.StatusInternalServerError)
+	return
+}
+
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+
+    // Access the MongoDB collection
+    collection := database.OpenCollection(database.Client, "entry")
+    vars := mux.Vars(r)
+    entryId := vars["entryId"]
+
+    // Create a filter to find the entry by ID
+    filter := bson.M{"id": entryId}
+
+    // Check if the doctor exists
+    var entry bson.M
+    if err := collection.FindOne(ctx, filter).Decode(&entry); err != nil {
+        if err == mongo.ErrNoDocuments {
+            http.Error(w, "No entry found with given ID", http.StatusNotFound)
+            return
+        }
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    update := bson.M{
+        "$set": bson.M{
+            "change_status": entryReq.ChangeStatus,
+            "change_approval_by": entryReq.ChangeApprovalBy,
+            "updated_at": time.Now(),
+        },
+    }
+
+    // Update the doctor document
+    if _, err := collection.UpdateOne(ctx, filter, update); err != nil {
+        http.Error(w, "Failed to update entry", http.StatusInternalServerError)
+        return
+    }
+
+    // Return success response
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(bson.M{"ok": true, "message": "Record updated successfully","status":"success"})
+
+}
+
+func GenerateAccountantExcelReport(w http.ResponseWriter, r *http.Request) {
+    entriesCollection := database.OpenCollection(database.Client, "entry")
+    usersCollection := database.OpenCollection(database.Client, "users")
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+
+    vars := mux.Vars(r)
+    username := vars["username"]
+    // Fetch user ID based on username
+    var user bson.M
+    if err := usersCollection.FindOne(ctx, bson.M{"username": username}).Decode(&user); err != nil {
+        http.Error(w, "Failed to fetch user: "+err.Error(), http.StatusBadRequest)
+        return
+    }
+    userId, ok := user["id"].(string)
+    if !ok {
+        http.Error(w, "User ID not found or invalid", http.StatusBadRequest)
+        return
+    }
+    filter := bson.M{"processed_by": userId}
+    cur, err := entriesCollection.Find(ctx, filter)
+    if err != nil {
+        http.Error(w, "Failed to fetch records: "+err.Error(), http.StatusInternalServerError)
+        return
+    }
+    defer cur.Close(ctx)
+
+    var entries []bson.M
+    if err := cur.All(ctx, &entries); err != nil {
+        http.Error(w, "Failed to parse records: "+err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    f := excelize.NewFile()
+    sheetName := fmt.Sprintf("Report %s",user["name"])
+    index, err := f.NewSheet(sheetName)
+    if err != nil {
+        http.Error(w, "Failed to create a new sheet: "+err.Error(), http.StatusInternalServerError)
+        return
+    }
+    f.SetActiveSheet(index)
+
+    headers := []string{"ID", "Description", "Main Category", "Sub Category", "Payment", "Approval Status", "Date","Approved By"}
+    for i, header := range headers {
+        col := getColumnLetter(i) + "1"
+        f.SetCellValue(sheetName, col, header)
+    }
+
+	for i, entry := range entries {
+        row := strconv.Itoa(i + 2)  // Start from the second row
+        f.SetCellValue(sheetName, "A"+row, entry["id"])
+        f.SetCellValue(sheetName, "B"+row, entry["description"])
+        f.SetCellValue(sheetName, "C"+row, entry["main_category"])
+        f.SetCellValue(sheetName, "D"+row, entry["sub_category"])
+        f.SetCellValue(sheetName, "E"+row, entry["payment"])
+        f.SetCellValue(sheetName, "F"+row, entry["approval_status"])
+      
+		// Handle date formatting
+if dateStr, ok := entry["date"].(string); ok {
+    if dateStr == "" {
+        fmt.Println("Date string is empty")
+        f.SetCellValue(sheetName, "G"+row, "No date provided")
+    } else {
+        parsedDate, err := time.Parse(time.RFC3339, dateStr) 
+        if err == nil {
+            formattedDate := parsedDate.Format("2006-01-02") 
+            f.SetCellValue(sheetName, "G"+row, formattedDate)
+        } else {
+            fmt.Printf("Failed to parse date '%s': %v\n", dateStr, err)
+            f.SetCellValue(sheetName, "G"+row, "Invalid date")
+        }
+    }
+} else {
+    fmt.Println("Date field is missing or not a string")
+    f.SetCellValue(sheetName, "G"+row, "No date field")
+}
+
+// Handling approved_by_details
+if details, ok := entry["approved_by_details"].(bson.M); ok {
+    if name, ok := details["name"].(string); ok {
+        f.SetCellValue(sheetName, "H"+row, name)
+    } else {
+        fmt.Printf("Type assertion for name failed, details['name']: %v\n", details["name"])
+        f.SetCellValue(sheetName, "H"+row, "Name not available") 
+    }
+} else {
+    fmt.Printf("Type assertion for approved_by_details failed, entry['approved_by_details']: %v\n", entry["approved_by_details"])
+    f.SetCellValue(sheetName, "H"+row, "Details not available")  
+}
+
+    }
+
+
+    buf, err := f.WriteToBuffer()
+    if err != nil {
+        http.Error(w, "Failed to create Excel file", http.StatusInternalServerError)
+        return
+    }
+
+    w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    w.Header().Set("Content-Disposition", "attachment; filename=report.xlsx")
+    w.Write(buf.Bytes())
+}
