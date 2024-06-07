@@ -47,9 +47,12 @@ func SignUp(w http.ResponseWriter, r *http.Request) {
         Username: signUpReq.Username,
         Name: signUpReq.Name,
         Email: signUpReq.Email,
+		Phone: signUpReq.Phone,
+		ImageProfile: signUpReq.ImageProfile,
 		Role: signUpReq.Role,
         Password: signUpReq.Password,
         ID: uuid.NewString(), 
+		Bio: signUpReq.Bio,
 		CreatedAt: time.Now(), 
         UpdatedAt: time.Now(),
     }
