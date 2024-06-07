@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/xuri/excelize/v2"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 func CreateAnEntry(w http.ResponseWriter, r *http.Request) {
@@ -192,59 +194,6 @@ defer cancel()
 
 }
 
-func GenerateMyReport(w http.ResponseWriter, r *http.Request) {
-    // Setup database collections
-    entriesCollection := database.OpenCollection(database.Client, "entry")
-    usersCollection := database.OpenCollection(database.Client, "users")
-
-    // Create a context with a timeout
-    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-    defer cancel()
-
-    // Get accountantId from URL parameters
-    vars := mux.Vars(r)
-    accountantId := vars["accountantId"]
-
-    // Define filter to fetch entries
-    filter := bson.M{"processed_by": bson.M{"$eq": accountantId}}
-    cur, err := entriesCollection.Find(ctx, filter)
-    if err != nil {
-        http.Error(w, "Failed to fetch records: "+err.Error(), http.StatusInternalServerError)
-        return
-    }
-    defer cur.Close(ctx)
-
-    var entries []bson.M
-    if err := cur.All(ctx, &entries); err != nil {
-        http.Error(w, "Failed to parse records: "+err.Error(), http.StatusInternalServerError)
-        return
-    }
-
-    // Enrich entries with user details
-    for i, entry := range entries {
-        enrichUserDetail(ctx, usersCollection, "approved_by", entry, entries, i)
-        enrichUserDetail(ctx, usersCollection, "change_approval_by", entry, entries, i)
-    }
-
-    // Send the results as JSON
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(bson.M{"ok": true, "status": "success", "entries": entries})
-}
-
-func enrichUserDetail(ctx context.Context, usersCollection *mongo.Collection, fieldName string, entry bson.M, entries []bson.M, index int) {
-    userID, ok := entry[fieldName].(string)
-    if ok && userID != "" {
-        var user bson.M
-        // Assuming _id is of type ObjectId in MongoDB, if it's a string adjust accordingly.
-        if err := usersCollection.FindOne(ctx, bson.M{"id": userID}).Decode(&user); err == nil {
-            delete(user, "password") // Safely remove the password from the user details
-            entry[fieldName+"_details"] = user
-        } else {
-            entry[fieldName+"_details"] = "User details not found"
-        }
-        entries[index] = entry // Update the entry in the slice with enriched details
-    }
-}
 
 func getColumnLetter(index int) string {
     return string(rune('A' + index))
@@ -252,7 +201,7 @@ func getColumnLetter(index int) string {
 
 func GenerateExcelReport(w http.ResponseWriter, r *http.Request) {
     entriesCollection := database.OpenCollection(database.Client, "entry")
-   // usersCollection := database.OpenCollection(database.Client, "users")
+    usersCollection := database.OpenCollection(database.Client, "users")
     ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
     defer cancel()
 
@@ -281,7 +230,7 @@ func GenerateExcelReport(w http.ResponseWriter, r *http.Request) {
     }
     f.SetActiveSheet(index)
 
-    headers := []string{"ID", "Description", "Main Category", "Sub Category", "Payment", "Approval Status", "Date","Approved By"}
+    headers := []string{"ID", "Description", "Main Category", "Sub Category", "Payment", "Approval Status","Approved By","Date"}
     for i, header := range headers {
         col := getColumnLetter(i) + "1"
         f.SetCellValue(sheetName, col, header)
@@ -294,40 +243,34 @@ func GenerateExcelReport(w http.ResponseWriter, r *http.Request) {
         f.SetCellValue(sheetName, "C"+row, entry["main_category"])
         f.SetCellValue(sheetName, "D"+row, entry["sub_category"])
         f.SetCellValue(sheetName, "E"+row, entry["payment"])
-        f.SetCellValue(sheetName, "F"+row, entry["approval_status"])
+		 if approvalStatus, ok := entry["approval_status"].(string); ok && approvalStatus != "" {
+            f.SetCellValue(sheetName, "F"+row, approvalStatus)
+        } else {
+            f.SetCellValue(sheetName, "F"+row, "Pending")
+        }
+      
       
 		// Handle date formatting
-if dateStr, ok := entry["created_at"].(string); ok {
-    if dateStr == "" {
-        fmt.Println("Date string is empty")
-        f.SetCellValue(sheetName, "G"+row, "No date provided")
-    } else {
-        parsedDate, err := time.Parse(time.RFC3339, dateStr) 
-        if err == nil {
-            formattedDate := parsedDate.Format("2006-01-02") 
-            f.SetCellValue(sheetName, "G"+row, formattedDate)
-        } else {
-            fmt.Printf("Failed to parse date '%s': %v\n", dateStr, err)
-            f.SetCellValue(sheetName, "G"+row, "Invalid date")
-        }
-    }
-} else {
-    fmt.Println("Date field is missing or not a string")
-    f.SetCellValue(sheetName, "G"+row, "No date field")
-}
+		
 
-// Handling approved_by_details
-if details, ok := entry["approved_by_details"].(bson.M); ok {
-    if name, ok := details["name"].(string); ok {
-        f.SetCellValue(sheetName, "H"+row, name)
-    } else {
-        fmt.Printf("Type assertion for name failed, details['name']: %v\n", details["name"])
-        f.SetCellValue(sheetName, "H"+row, "Name not available") 
-    }
+
+ // Handling approved_by field to fetch user details
+ if approvedById, ok := entry["approved_by"].(string); ok && approvedById != "" {
+	var approvedByUser bson.M
+	if err := usersCollection.FindOne(ctx, bson.M{"id": approvedById}).Decode(&approvedByUser); err == nil {
+		if name, ok := approvedByUser["name"].(string); ok {
+			f.SetCellValue(sheetName, "G"+row, name)
+		} else {
+			f.SetCellValue(sheetName, "G"+row, "Name not available")
+		}
+	} else {
+		f.SetCellValue(sheetName, "G"+row, "User details not found")
+	}
 } else {
-    fmt.Printf("Type assertion for approved_by_details failed, entry['approved_by_details']: %v\n", entry["approved_by_details"])
-    f.SetCellValue(sheetName, "H"+row, "Details not available")  
+	f.SetCellValue(sheetName, "G"+row, "_")
 }
+f.SetCellValue(sheetName, "H"+row, entry["created_at"])
+
 
     }
 
@@ -341,4 +284,112 @@ if details, ok := entry["approved_by_details"].(bson.M); ok {
     w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     w.Header().Set("Content-Disposition", "attachment; filename=report.xlsx")
     w.Write(buf.Bytes())
+}
+
+
+func GetAllMyEntries(w http.ResponseWriter, r *http.Request) {
+    // Get the MongoDB collection for entries and users
+    entriesCollection := database.OpenCollection(database.Client, "entry")
+    usersCollection := database.OpenCollection(database.Client, "users")
+
+    vars := mux.Vars(r)
+    accountantId := vars["accountantId"]
+
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+
+    query := r.URL.Query()
+    limitQuery := query.Get("limit")
+    pageQuery := query.Get("page")
+
+    limit := 10
+    page := 1
+
+    if l, err := strconv.Atoi(limitQuery); err == nil && l > 0 {
+        limit = l
+    }
+    if p, err := strconv.Atoi(pageQuery); err == nil && p > 1 {
+        page = p
+    }
+
+    skip := (page - 1) * limit
+
+    // Filter to fetch entries processed by the accountant
+    filter := bson.M{"processed_by": accountantId}
+
+    // Count total documents for pagination
+    total, err := entriesCollection.CountDocuments(ctx, filter)
+    if err != nil {
+        http.Error(w, "Failed to count documents: "+err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    totalPages := int(math.Ceil(float64(total) / float64(limit)))
+
+    // Find options for pagination
+    findOptions := options.Find()
+    findOptions.SetLimit(int64(limit))
+    findOptions.SetSkip(int64(skip))
+
+    // Fetch entries with pagination
+    cur, err := entriesCollection.Find(ctx, filter, findOptions)
+    if err != nil {
+        http.Error(w, "Failed to fetch records: "+err.Error(), http.StatusInternalServerError)
+        return
+    }
+    defer cur.Close(ctx)
+
+    var entries []bson.M
+    if err = cur.All(ctx, &entries); err != nil {
+        http.Error(w, "Failed to parse records: "+err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    // Enrich entries with user details
+    for _, entry := range entries {
+        if processedBy, ok := entry["processed_by"].(string); ok && processedBy != "" {
+            var user bson.M
+            if err := usersCollection.FindOne(ctx, bson.M{"id": processedBy}).Decode(&user); err == nil {
+                delete(user, "password")
+                entry["processed_by"] = user
+            } else {
+                entry["processed_by"] = "User details not found"
+            }
+        }
+        if approvedBy, ok := entry["approved_by"].(string); ok && approvedBy != "" {
+            var user bson.M
+            if err := usersCollection.FindOne(ctx, bson.M{"id": approvedBy}).Decode(&user); err == nil {
+                delete(user, "password")
+                entry["approved_by"] = user
+            } else {
+                entry["approved_by"] = "User details not found"
+            }
+        }
+    }
+
+    // Create and populate the pagination map
+    pagination := map[string]interface{}{
+        "current_page": page,
+        "total_pages":  totalPages,
+        "limit":        limit,
+        "total_items":  total,
+    }
+    // Add URLs to the pagination map before adding it to the result
+    if page < totalPages {
+        nextURL := fmt.Sprintf("%s?limit=%d&page=%d", r.URL.Path, limit, page+1)
+        pagination["next_page_url"] = nextURL
+    }
+    if page > 1 {
+        prevURL := fmt.Sprintf("%s?limit=%d&page=%d", r.URL.Path, limit, page-1)
+        pagination["previous_page_url"] = prevURL
+    }
+
+    // Sending back the results as JSON
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(bson.M{
+        "ok":        true,
+        "status":    "success",
+        "entries":   entries,
+        "pagination": pagination,
+    })
 }

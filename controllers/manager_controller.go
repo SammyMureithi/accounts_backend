@@ -126,6 +126,15 @@ func GetAllEntries(w http.ResponseWriter, r *http.Request) {
                 entry["processed_by"] = "User details not found"
             }
         }
+		if approvedBy, ok := entry["approved_by"].(string); ok && approvedBy != "" {
+            var user bson.M
+            if err := usersCollection.FindOne(ctx, bson.M{"id": approvedBy}).Decode(&user); err == nil {
+                delete(user, "password")
+                entry["approved_by"] = user
+            } else {
+                entry["approved_by"] = "User details not found"
+            }
+        }
     }
 
     // Create and populate the pagination map

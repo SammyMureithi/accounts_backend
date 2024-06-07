@@ -124,9 +124,7 @@ if err != nil {
 
 }
 
-func getColunLetter(col int) string {
-    return string(rune('A' + col))
-}
+
 
 func GenerateAccountantExcelReport(w http.ResponseWriter, r *http.Request) {
     entriesCollection := database.OpenCollection(database.Client, "entry")
@@ -172,49 +170,59 @@ func GenerateAccountantExcelReport(w http.ResponseWriter, r *http.Request) {
     }
     f.SetActiveSheet(index)
 
-    headers := []string{"ID", "Description", "Main Category", "Sub Category", "Payment", "Approval Status", "Date", "Approved By"}
+    headers := []string{"Reference", "Description", "Main Category", "Sub Category", "Payment", "Approval Status", "Processed by","Approved By","Date",}
     for i, header := range headers {
         col := getColumnLetter(i) + "1"
         f.SetCellValue(sheetName, col, header)
     }
-
     for i, entry := range entries {
-        row := strconv.Itoa(i + 2) // Start from the second row
+        row := strconv.Itoa(i + 2)  
         f.SetCellValue(sheetName, "A"+row, entry["id"])
         f.SetCellValue(sheetName, "B"+row, entry["description"])
         f.SetCellValue(sheetName, "C"+row, entry["main_category"])
         f.SetCellValue(sheetName, "D"+row, entry["sub_category"])
         f.SetCellValue(sheetName, "E"+row, entry["payment"])
-        f.SetCellValue(sheetName, "F"+row, entry["approval_status"])
-
-        // Handle date formatting
-        if dateStr, ok := entry["date"].(string); ok {
-            if dateStr == "" {
-                f.SetCellValue(sheetName, "G"+row, "No date provided")
-            } else {
-                parsedDate, err := time.Parse(time.RFC3339, dateStr)
-                if err == nil {
-                    formattedDate := parsedDate.Format("2006-01-02")
-                    f.SetCellValue(sheetName, "G"+row, formattedDate)
-                } else {
-                    f.SetCellValue(sheetName, "G"+row, "Invalid date")
-                }
-            }
+		 if approvalStatus, ok := entry["approval_status"].(string); ok && approvalStatus != "" {
+            f.SetCellValue(sheetName, "F"+row, approvalStatus)
         } else {
-            f.SetCellValue(sheetName, "G"+row, "No date field")
+            f.SetCellValue(sheetName, "F"+row, "Pending")
         }
+     // Handling processed_by field to fetch user details
+ if approvedById, ok := entry["processed_by"].(string); ok && approvedById != "" {
+	var approvedByUser bson.M
+	if err := usersCollection.FindOne(ctx, bson.M{"id": approvedById}).Decode(&approvedByUser); err == nil {
+		if name, ok := approvedByUser["name"].(string); ok {
+			f.SetCellValue(sheetName, "G"+row, name)
+		} else {
+			f.SetCellValue(sheetName, "G"+row, "Name not available")
+		}
+	} else {
+		f.SetCellValue(sheetName, "G"+row, "User details not found")
+	}
+} else {
+	f.SetCellValue(sheetName, "G"+row, "_")
+}  
 
-        // Handling approved_by_details
-        if details, ok := entry["approved_by_details"].(bson.M); ok {
-            if name, ok := details["name"].(string); ok {
-                f.SetCellValue(sheetName, "H"+row, name)
-            } else {
-                f.SetCellValue(sheetName, "H"+row, "Name not available")
-            }
-        } else {
-            f.SetCellValue(sheetName, "H"+row, "Details not available")
-        }
+ // Handling approved_by field to fetch user details
+ if approvedById, ok := entry["approved_by"].(string); ok && approvedById != "" {
+	var approvedByUser bson.M
+	if err := usersCollection.FindOne(ctx, bson.M{"id": approvedById}).Decode(&approvedByUser); err == nil {
+		if name, ok := approvedByUser["name"].(string); ok {
+			f.SetCellValue(sheetName, "H"+row, name)
+		} else {
+			f.SetCellValue(sheetName, "H"+row, "Name not available")
+		}
+	} else {
+		f.SetCellValue(sheetName, "H"+row, "User details not found")
+	}
+} else {
+	f.SetCellValue(sheetName, "H"+row, "_")
+}
+f.SetCellValue(sheetName, "I"+row, entry["created_at"])
+
     }
+
+
 
     buf, err := f.WriteToBuffer()
     if err != nil {
@@ -226,3 +234,99 @@ func GenerateAccountantExcelReport(w http.ResponseWriter, r *http.Request) {
     w.Header().Set("Content-Disposition", "attachment; filename=report.xlsx")
     w.Write(buf.Bytes())
 }
+
+
+func GenerateAllAccountantExcelReport(w http.ResponseWriter, r *http.Request) {
+    entriesCollection := database.OpenCollection(database.Client, "entry")
+    usersCollection := database.OpenCollection(database.Client, "users")
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+
+    filter := bson.M{}
+    cur, err := entriesCollection.Find(ctx, filter)
+    if err != nil {
+        http.Error(w, "Failed to fetch records: "+err.Error(), http.StatusInternalServerError)
+        return
+    }
+    defer cur.Close(ctx)
+
+    var entries []bson.M
+    if err := cur.All(ctx, &entries); err != nil {
+        http.Error(w, "Failed to parse records: "+err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    f := excelize.NewFile()
+    sheetName := "Report"
+    index, err := f.NewSheet(sheetName)
+    if err != nil {
+        http.Error(w, "Failed to create a new sheet: "+err.Error(), http.StatusInternalServerError)
+        return
+    }
+    f.SetActiveSheet(index)
+
+    headers := []string{"Reference", "Description", "Main Category", "Sub Category", "Payment", "Approval Status","Processed By","Approved By","Date"}
+    for i, header := range headers {
+        col := getColumnLetter(i) + "1"
+        f.SetCellValue(sheetName, col, header)
+    }
+
+	for i, entry := range entries {
+        row := strconv.Itoa(i + 2)  // Start from the second row
+        f.SetCellValue(sheetName, "A"+row, entry["id"])
+        f.SetCellValue(sheetName, "B"+row, entry["description"])
+        f.SetCellValue(sheetName, "C"+row, entry["main_category"])
+        f.SetCellValue(sheetName, "D"+row, entry["sub_category"])
+        f.SetCellValue(sheetName, "E"+row, entry["payment"])
+		 if approvalStatus, ok := entry["approval_status"].(string); ok && approvalStatus != "" {
+            f.SetCellValue(sheetName, "F"+row, approvalStatus)
+        } else {
+            f.SetCellValue(sheetName, "F"+row, "Pending")
+        }
+     // Handling processed_by field to fetch user details
+ if approvedById, ok := entry["processed_by"].(string); ok && approvedById != "" {
+	var approvedByUser bson.M
+	if err := usersCollection.FindOne(ctx, bson.M{"id": approvedById}).Decode(&approvedByUser); err == nil {
+		if name, ok := approvedByUser["name"].(string); ok {
+			f.SetCellValue(sheetName, "G"+row, name)
+		} else {
+			f.SetCellValue(sheetName, "G"+row, "Name not available")
+		}
+	} else {
+		f.SetCellValue(sheetName, "G"+row, "User details not found")
+	}
+} else {
+	f.SetCellValue(sheetName, "G"+row, "_")
+}  
+
+ // Handling approved_by field to fetch user details
+ if approvedById, ok := entry["approved_by"].(string); ok && approvedById != "" {
+	var approvedByUser bson.M
+	if err := usersCollection.FindOne(ctx, bson.M{"id": approvedById}).Decode(&approvedByUser); err == nil {
+		if name, ok := approvedByUser["name"].(string); ok {
+			f.SetCellValue(sheetName, "H"+row, name)
+		} else {
+			f.SetCellValue(sheetName, "H"+row, "Name not available")
+		}
+	} else {
+		f.SetCellValue(sheetName, "H"+row, "User details not found")
+	}
+} else {
+	f.SetCellValue(sheetName, "H"+row, "_")
+}
+f.SetCellValue(sheetName, "I"+row, entry["created_at"])
+
+    }
+
+
+    buf, err := f.WriteToBuffer()
+    if err != nil {
+        http.Error(w, "Failed to create Excel file", http.StatusInternalServerError)
+        return
+    }
+
+    w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    w.Header().Set("Content-Disposition", "attachment; filename=report.xlsx")
+    w.Write(buf.Bytes())
+}
+
