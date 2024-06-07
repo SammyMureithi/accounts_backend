@@ -124,6 +124,10 @@ if err != nil {
 
 }
 
+func getColunLetter(col int) string {
+    return string(rune('A' + col))
+}
+
 func GenerateAccountantExcelReport(w http.ResponseWriter, r *http.Request) {
     entriesCollection := database.OpenCollection(database.Client, "entry")
     usersCollection := database.OpenCollection(database.Client, "users")
@@ -132,6 +136,7 @@ func GenerateAccountantExcelReport(w http.ResponseWriter, r *http.Request) {
 
     vars := mux.Vars(r)
     username := vars["username"]
+
     // Fetch user ID based on username
     var user bson.M
     if err := usersCollection.FindOne(ctx, bson.M{"username": username}).Decode(&user); err != nil {
@@ -143,6 +148,7 @@ func GenerateAccountantExcelReport(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "User ID not found or invalid", http.StatusBadRequest)
         return
     }
+
     filter := bson.M{"processed_by": userId}
     cur, err := entriesCollection.Find(ctx, filter)
     if err != nil {
@@ -158,7 +164,7 @@ func GenerateAccountantExcelReport(w http.ResponseWriter, r *http.Request) {
     }
 
     f := excelize.NewFile()
-    sheetName := fmt.Sprintf("Report %s",user["name"])
+    sheetName := fmt.Sprintf("Report %s", user["name"])
     index, err := f.NewSheet(sheetName)
     if err != nil {
         http.Error(w, "Failed to create a new sheet: "+err.Error(), http.StatusInternalServerError)
@@ -166,56 +172,49 @@ func GenerateAccountantExcelReport(w http.ResponseWriter, r *http.Request) {
     }
     f.SetActiveSheet(index)
 
-    headers := []string{"ID", "Description", "Main Category", "Sub Category", "Payment", "Approval Status", "Date","Approved By"}
+    headers := []string{"ID", "Description", "Main Category", "Sub Category", "Payment", "Approval Status", "Date", "Approved By"}
     for i, header := range headers {
         col := getColumnLetter(i) + "1"
         f.SetCellValue(sheetName, col, header)
     }
 
-	for i, entry := range entries {
-        row := strconv.Itoa(i + 2)  // Start from the second row
+    for i, entry := range entries {
+        row := strconv.Itoa(i + 2) // Start from the second row
         f.SetCellValue(sheetName, "A"+row, entry["id"])
         f.SetCellValue(sheetName, "B"+row, entry["description"])
         f.SetCellValue(sheetName, "C"+row, entry["main_category"])
         f.SetCellValue(sheetName, "D"+row, entry["sub_category"])
         f.SetCellValue(sheetName, "E"+row, entry["payment"])
         f.SetCellValue(sheetName, "F"+row, entry["approval_status"])
-      
-		// Handle date formatting
-if dateStr, ok := entry["date"].(string); ok {
-    if dateStr == "" {
-        fmt.Println("Date string is empty")
-        f.SetCellValue(sheetName, "G"+row, "No date provided")
-    } else {
-        parsedDate, err := time.Parse(time.RFC3339, dateStr) 
-        if err == nil {
-            formattedDate := parsedDate.Format("2006-01-02") 
-            f.SetCellValue(sheetName, "G"+row, formattedDate)
+
+        // Handle date formatting
+        if dateStr, ok := entry["date"].(string); ok {
+            if dateStr == "" {
+                f.SetCellValue(sheetName, "G"+row, "No date provided")
+            } else {
+                parsedDate, err := time.Parse(time.RFC3339, dateStr)
+                if err == nil {
+                    formattedDate := parsedDate.Format("2006-01-02")
+                    f.SetCellValue(sheetName, "G"+row, formattedDate)
+                } else {
+                    f.SetCellValue(sheetName, "G"+row, "Invalid date")
+                }
+            }
         } else {
-            fmt.Printf("Failed to parse date '%s': %v\n", dateStr, err)
-            f.SetCellValue(sheetName, "G"+row, "Invalid date")
+            f.SetCellValue(sheetName, "G"+row, "No date field")
+        }
+
+        // Handling approved_by_details
+        if details, ok := entry["approved_by_details"].(bson.M); ok {
+            if name, ok := details["name"].(string); ok {
+                f.SetCellValue(sheetName, "H"+row, name)
+            } else {
+                f.SetCellValue(sheetName, "H"+row, "Name not available")
+            }
+        } else {
+            f.SetCellValue(sheetName, "H"+row, "Details not available")
         }
     }
-} else {
-    fmt.Println("Date field is missing or not a string")
-    f.SetCellValue(sheetName, "G"+row, "No date field")
-}
-
-// Handling approved_by_details
-if details, ok := entry["approved_by_details"].(bson.M); ok {
-    if name, ok := details["name"].(string); ok {
-        f.SetCellValue(sheetName, "H"+row, name)
-    } else {
-        fmt.Printf("Type assertion for name failed, details['name']: %v\n", details["name"])
-        f.SetCellValue(sheetName, "H"+row, "Name not available") 
-    }
-} else {
-    fmt.Printf("Type assertion for approved_by_details failed, entry['approved_by_details']: %v\n", entry["approved_by_details"])
-    f.SetCellValue(sheetName, "H"+row, "Details not available")  
-}
-
-    }
-
 
     buf, err := f.WriteToBuffer()
     if err != nil {
