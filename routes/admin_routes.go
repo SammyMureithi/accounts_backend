@@ -27,7 +27,9 @@ func AdminRoutes(router *mux.Router) {
 	makeEntryChangeRoute := middleware.RoleBasedJWTMiddleware(http.HandlerFunc(controllers.MakeChangetoEntry), []string{"Admin"})
     router.Handle("/admin/entry_change/{entryId}", makeEntryChangeRoute).Methods("PUT")
 
-	router.HandleFunc("/manager/report/{username}", controllers.GenerateAccountantExcelReport).Methods("GET")
+	router.HandleFunc("/admin/report/{username}", controllers.GenerateAccountantExcelReport).Methods("GET")
+	router.HandleFunc("/admin/report", controllers.GenerateAllAccountantExcelReport).Methods("GET")
+
 
 
 

@@ -24,5 +24,7 @@ func ManagerRoutes(router *mux.Router) {
     router.Handle("/manager/entry_change/{entryId}", makeEntryChangeRoute).Methods("PUT")
 
 	router.HandleFunc("/manager/report/{username}", controllers.GenerateAccountantExcelReport).Methods("GET")
+	
+	router.HandleFunc("/manager/report", controllers.GenerateAllAccountantExcelReport).Methods("GET")
 
 }
