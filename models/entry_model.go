@@ -7,7 +7,6 @@ import (
 // Entry struct to define an entry model
 type Entry struct {
     ID             string    `json:"id"`
-    Date           time.Time `json:"date" bson:"date" validate:"required"`
     Description    string    `json:"description" bson:"description" validate:"required"`
     MainCategory   string    `json:"main_category" bson:"main_category" validate:"required"`
     SubCategory    string    `json:"sub_category" bson:"sub_category" validate:"required"`
