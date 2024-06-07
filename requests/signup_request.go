@@ -3,12 +3,14 @@ package request
 import "github.com/go-playground/validator/v10"
 
 type SignUpRequest struct {
-	Name     string `json:"name" validate:"required"`
-	Username string `json:"username" validate:"required,min=3,max=20"`
-	Phone    string `json:"phone" validate:"required,len=10"`
-	Email    string `json:"email" validate:"required,email"`
-	Role     string `json:"role" validate:"required,oneof=Accountant Admin Manager"`
-	Password string `json:"password" validate:"required,len=8"`
+	Name              string `json:"name" validate:"required"`
+	Username          string `json:"username" validate:"required,min=3,max=20"`
+	Phone             string `json:"phone" validate:"required,len=10"`
+	Bio               string `json:"bio" validate:"required"`
+	ImageProfile      *string `json:"image_profile"`
+	Email             string `json:"email" validate:"required,email"`
+	Role              string `json:"role" validate:"required,oneof=Accountant Admin Manager"`
+	Password          string `json:"password" validate:"required,len=8"`
 }
 // Humanize errors returned by the validator.
 func CustomeErrorMessage(errs validator.ValidationErrors) []string {
