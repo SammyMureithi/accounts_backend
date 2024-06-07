@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/gorilla/mux"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 func GetUnconfirmedEntries(w http.ResponseWriter, r *http.Request) {
     // Get the MongoDB collection for entries
@@ -58,6 +61,98 @@ func GetUnconfirmedEntries(w http.ResponseWriter, r *http.Request) {
     // Sending back the results as JSON
     w.Header().Set("Content-Type", "application/json")
     json.NewEncoder(w).Encode(bson.M{"ok": true, "status": "success", "entries": entries})
+}
+
+func GetAllEntries(w http.ResponseWriter, r *http.Request) {
+    // Get the MongoDB collection for entries and users
+    entriesCollection := database.OpenCollection(database.Client, "entry")
+    usersCollection := database.OpenCollection(database.Client, "users")
+
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+
+    query := r.URL.Query()
+    limitQuery := query.Get("limit")
+    pageQuery := query.Get("page")
+
+    limit := 10
+    page := 1
+
+    if l, err := strconv.Atoi(limitQuery); err == nil && l > 0 {
+        limit = l
+    }
+    if p, err := strconv.Atoi(pageQuery); err == nil && p > 1 {
+        page = p
+    }
+
+    skip := (page - 1) * limit
+
+    // Count total documents for pagination
+    total, err := entriesCollection.CountDocuments(ctx, bson.D{})
+    if err != nil {
+        http.Error(w, "Failed to count documents: "+err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    totalPages := int(math.Ceil(float64(total) / float64(limit)))
+
+    // Find options for pagination
+    findOptions := options.Find()
+    findOptions.SetLimit(int64(limit))
+    findOptions.SetSkip(int64(skip))
+
+    // Fetch entries with pagination
+    cur, err := entriesCollection.Find(ctx, bson.D{}, findOptions)
+    if err != nil {
+        http.Error(w, "Failed to fetch records: "+err.Error(), http.StatusInternalServerError)
+        return
+    }
+    defer cur.Close(ctx)
+
+    var entries []bson.M
+    if err = cur.All(ctx, &entries); err != nil {
+        http.Error(w, "Failed to parse records: "+err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    // Enrich entries with user details
+    for _, entry := range entries {
+        if processedBy, ok := entry["processed_by"].(string); ok && processedBy != "" {
+            var user bson.M
+            if err := usersCollection.FindOne(ctx, bson.M{"id": processedBy}).Decode(&user); err == nil {
+                delete(user, "password")
+                entry["processed_by"] = user
+            } else {
+                entry["processed_by"] = "User details not found"
+            }
+        }
+    }
+
+    // Create and populate the pagination map
+    pagination := map[string]interface{}{
+        "current_page": page,
+        "total_pages":  totalPages,
+        "limit":        limit,
+        "total_items":  total,
+    }
+	 // Add URLs to the pagination map before adding it to the result
+	 if page < totalPages {
+        nextURL := fmt.Sprintf("%s?limit=%d&page=%d", r.URL.Path, limit, page+1)
+        pagination["next_page_url"] = nextURL
+    }
+    if page > 1 {
+        prevURL := fmt.Sprintf("%s?limit=%d&page=%d", r.URL.Path, limit, page-1)
+        pagination["previous_page_url"] = prevURL
+    }
+
+    // Sending back the results as JSON
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(bson.M{
+        "ok":     true,
+        "status": "success",
+        "entries": entries,
+        "pagination": pagination,
+    })
 }
 
 func ApproveEntry(w http.ResponseWriter, r *http.Request) {
