@@ -43,7 +43,6 @@ if err != nil {
 }
 
 newEntry := models.Entry{
-	Date: entryReq.Date,
 	Description: entryReq.Description,
 	MainCategory: entryReq.MainCategory,
 	SubCategory: entryReq.SubCategory,
@@ -169,7 +168,6 @@ defer cancel()
 
  update := bson.M{
 	 "$set": bson.M{
-		 "date": entryReq.Date,
 		 "description": entryReq.Description,
 		 "main_category": entryReq.MainCategory,
 		 "payment": entryReq.Payment,
@@ -299,7 +297,7 @@ func GenerateExcelReport(w http.ResponseWriter, r *http.Request) {
         f.SetCellValue(sheetName, "F"+row, entry["approval_status"])
       
 		// Handle date formatting
-if dateStr, ok := entry["date"].(string); ok {
+if dateStr, ok := entry["created_at"].(string); ok {
     if dateStr == "" {
         fmt.Println("Date string is empty")
         f.SetCellValue(sheetName, "G"+row, "No date provided")
