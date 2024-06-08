@@ -16,7 +16,7 @@ type UserClaims struct {
 }
 
 // Checks if the user role is in the list of allowed roles
-func isAllowedAccess(userRoles []string, allowedRoles []string) bool {
+func IsAllowedAccess(userRoles []string, allowedRoles []string) bool {
     roleMap := make(map[string]bool)
     for _, role := range userRoles {
         roleMap[role] = true
@@ -53,12 +53,13 @@ func RoleBasedJWTMiddleware(next http.Handler, allowedRoles []string) http.Handl
             return
         }
 
-        if !isAllowedAccess(claims.Roles, allowedRoles) {
+        if !IsAllowedAccess(claims.Roles, allowedRoles) {
             http.Error(w, "Not Allowed", http.StatusForbidden)
             return
         }
 
         ctx := context.WithValue(r.Context(), "userEmail", claims.Email)
+        ctx = context.WithValue(ctx, "userRoles", claims.Roles)
         next.ServeHTTP(w, r.WithContext(ctx))
     })
 }
