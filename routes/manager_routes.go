@@ -14,6 +14,7 @@ func ManagerRoutes(router *mux.Router) {
 	//Manager Routes 
 	getUnconfirmedEntryRoute := middleware.RoleBasedJWTMiddleware(http.HandlerFunc(controllers.GetUnconfirmedEntries), []string{"Manager"})
     router.Handle("/manager/unconfirmed_entry", getUnconfirmedEntryRoute).Methods("GET")
+	
 	getAllEntriesRoute := middleware.RoleBasedJWTMiddleware(http.HandlerFunc(controllers.GetAllEntries), []string{"Manager"})
     router.Handle("/manager/entry", getAllEntriesRoute).Methods("GET")
 	confirmedEntryRoute := middleware.RoleBasedJWTMiddleware(http.HandlerFunc(controllers.ApproveEntry), []string{"Manager"})
