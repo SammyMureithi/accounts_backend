@@ -22,9 +22,11 @@ func AccountantRoutes(router *mux.Router) {
     router.Handle("/accountant/reject_entry/{entryId}", updateRejectedEntryRoute).Methods("PUT")
 
 	getAccountantEntriesRoute := middleware.RoleBasedJWTMiddleware(http.HandlerFunc(controllers.GetAllMyEntries), []string{"Accountant"})
-    router.Handle("/accountant/entry/{accountantId}", getAccountantEntriesRoute).Methods("GET")
+    router.Handle("/entries/{accountantId}", getAccountantEntriesRoute).Methods("GET")
 	
-	router.HandleFunc("/accountant/report/{accountantId}", controllers.GenerateExcelReport).Methods("GET")
+	router.HandleFunc("/report/{accountantId}", controllers.GenerateExcelReport).Methods("GET")
+
+	
 
 	
 }
